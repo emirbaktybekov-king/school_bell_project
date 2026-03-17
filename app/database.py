@@ -49,7 +49,7 @@ class Database:
         cursor.execute("SELECT COUNT(*) as cnt FROM settings")
         if cursor.fetchone()['cnt'] == 0:
             defaults = {
-                'language': 'en',
+                'language': 'ru',
                 'autostart': 'false',
                 'start_minimized': 'false',
                 'volume': '100',
@@ -61,6 +61,72 @@ class Database:
                     (key, value)
                 )
             self.conn.commit()
+
+        # Insert default bell schedule if no bells exist
+        cursor.execute("SELECT COUNT(*) as cnt FROM bells")
+        if cursor.fetchone()['cnt'] == 0:
+            self._insert_default_schedule()
+
+    def _insert_default_schedule(self):
+        sound_seq = json.dumps([
+            {"type": "sound", "filename": "school-bell.mp3"},
+            {"type": "pause", "duration": 3},
+            {"type": "sound", "filename": "school-bell.mp3"}
+        ])
+        weekdays = json.dumps(["mon", "tue", "wed", "thu", "fri", "sat"])
+        cursor = self.conn.cursor()
+
+        # ===== 1 смена (Shift 1) =====
+        shift1 = [
+            ("1 смена - 1 урок (начало)", "07:30"),
+            ("1 смена - 1 урок (конец)",  "08:15"),
+            ("1 смена - 2 урок (начало)", "08:20"),
+            ("1 смена - 2 урок (конец)",  "09:05"),
+            ("1 смена - 3 урок (начало)", "09:10"),
+            ("1 смена - 3 урок (конец)",  "09:55"),
+            ("1 смена - 4 урок (начало)", "10:05"),
+            ("1 смена - 4 урок (конец)",  "10:50"),
+            ("1 смена - 5 урок (начало)", "10:55"),
+            ("1 смена - 5 урок (конец)",  "11:40"),
+            ("1 смена - 6 урок (начало)", "11:45"),
+            ("1 смена - 6 урок (конец)",  "12:30"),
+            ("1 смена - 7 урок (начало)", "12:35"),
+            ("1 смена - 7 урок (конец)",  "13:20"),
+        ]
+
+        # ===== 2 смена (Shift 2) =====
+        shift2 = [
+            ("2 смена - 0 урок (начало)", "12:35"),
+            ("2 смена - 0 урок (конец)",  "13:20"),
+            ("2 смена - 1 урок (начало)", "13:30"),
+            ("2 смена - 1 урок (конец)",  "14:15"),
+            ("2 смена - 2 урок (начало)", "14:20"),
+            ("2 смена - 2 урок (конец)",  "15:05"),
+            ("2 смена - 3 урок (начало)", "15:10"),
+            ("2 смена - 3 урок (конец)",  "15:55"),
+            ("2 смена - 4 урок (начало)", "16:05"),
+            ("2 смена - 4 урок (конец)",  "16:50"),
+            ("2 смена - 5 урок (начало)", "16:55"),
+            ("2 смена - 5 урок (конец)",  "17:40"),
+            ("2 смена - 6 урок (начало)", "17:45"),
+            ("2 смена - 6 урок (конец)",  "18:30"),
+        ]
+
+        # Combine, but skip duplicate times (12:35 and 13:20 overlap between shifts)
+        seen_times = set()
+        all_bells = []
+        for name, t in shift1 + shift2:
+            if t not in seen_times:
+                seen_times.add(t)
+                all_bells.append((name, t))
+            # If duplicate time, keep shift 1 name (it rings once for both)
+
+        for name, t in all_bells:
+            cursor.execute(
+                "INSERT INTO bells (name, time, enabled, days, sound_sequence) VALUES (?, ?, 1, ?, ?)",
+                (name, t, weekdays, sound_seq)
+            )
+        self.conn.commit()
 
     # --- Bells ---
 
