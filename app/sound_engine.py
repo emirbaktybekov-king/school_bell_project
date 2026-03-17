@@ -8,7 +8,7 @@ import json
 import threading
 
 from PySide6.QtCore import QObject, Signal, QUrl
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QAudioDevice
 
 
 class SoundEngine(QObject):
@@ -24,6 +24,7 @@ class SoundEngine(QObject):
         self._player = None
         self._audio_output = None
         self._volume = 100
+        self._output_device = None
         self._use_simpleaudio = False
 
         try:
@@ -34,6 +35,25 @@ class SoundEngine(QObject):
 
     def set_volume(self, volume):
         self._volume = max(0, min(100, volume))
+
+    def set_output_device(self, device_id):
+        if not device_id:
+            self._output_device = None
+            return
+        for device in QMediaDevices.audioOutputs():
+            dev_id = device.id().data().decode('utf-8', errors='replace')
+            if dev_id == device_id:
+                self._output_device = device
+                return
+        self._output_device = None
+
+    def _create_audio_output(self):
+        if self._output_device:
+            ao = QAudioOutput(self._output_device)
+        else:
+            ao = QAudioOutput()
+        ao.setVolume(self._volume / 100.0)
+        return ao
 
     def get_sound_path(self, filename):
         return os.path.join(self.sounds_path, filename)
@@ -82,8 +102,7 @@ class SoundEngine(QObject):
         if self._player:
             self._player.stop()
 
-        self._audio_output = QAudioOutput()
-        self._audio_output.setVolume(self._volume / 100.0)
+        self._audio_output = self._create_audio_output()
         self._player = QMediaPlayer()
         self._player.setAudioOutput(self._audio_output)
         self._player.setSource(QUrl.fromLocalFile(filepath))
@@ -156,8 +175,7 @@ class SoundEngine(QObject):
         from PySide6.QtCore import QTimer, QCoreApplication
 
         def setup_player():
-            ao = QAudioOutput()
-            ao.setVolume(self._volume / 100.0)
+            ao = self._create_audio_output()
             player = QMediaPlayer()
             player.setAudioOutput(ao)
             player.setSource(QUrl.fromLocalFile(filepath))

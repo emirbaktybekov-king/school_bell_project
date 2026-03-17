@@ -21,12 +21,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Pillow for icon
+        run: pip install Pillow
+
       - name: Build EXE
         run: |
           pyinstaller --onefile --noconsole --name SchoolBell `
             --add-data "assets;assets" `
             --add-data "locales;locales" `
             --add-data "data;data" `
+            --icon "assets/icon.ico" `
             app/main.py
 
       - name: Upload EXE

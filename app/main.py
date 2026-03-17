@@ -88,6 +88,11 @@ def main():
     localization.set_language(lang)
 
     sound_engine = SoundEngine(SOUNDS_PATH)
+    volume = int(db.get_setting('volume', '100'))
+    sound_engine.set_volume(volume)
+    audio_device = db.get_setting('audio_device', '')
+    if audio_device:
+        sound_engine.set_output_device(audio_device)
     scheduler = BellScheduler(db, sound_engine)
 
     window = MainWindow(db, localization, scheduler, sound_engine)

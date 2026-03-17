@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QMessageBox
 )
 from PySide6.QtCore import Qt
+from PySide6.QtMultimedia import QMediaDevices
 
 
 class SettingsTab(QWidget):
@@ -42,6 +43,23 @@ class SettingsTab(QWidget):
         self.lang_label = QLabel()
         lang_layout.addRow(self.lang_label, self.lang_combo)
         layout.addWidget(self.lang_group)
+
+        # Audio output device
+        self.audio_group = QGroupBox()
+        audio_layout = QFormLayout(self.audio_group)
+
+        self.audio_device_combo = QComboBox()
+        self._populate_audio_devices()
+        self.audio_device_label = QLabel()
+        audio_layout.addRow(self.audio_device_label, self.audio_device_combo)
+
+        self.refresh_devices_btn = QPushButton()
+        self.refresh_devices_btn.setObjectName("secondaryBtn")
+        self.refresh_devices_btn.setFixedWidth(160)
+        self.refresh_devices_btn.clicked.connect(self._populate_audio_devices)
+        audio_layout.addRow("", self.refresh_devices_btn)
+
+        layout.addWidget(self.audio_group)
 
         # Volume
         self.volume_group = QGroupBox()
@@ -77,6 +95,9 @@ class SettingsTab(QWidget):
         self.start_minimized_check.stateChanged.connect(self._on_start_minimized_changed)
         startup_layout.addWidget(self.start_minimized_check)
 
+        self.desktop_shortcut_check = QCheckBox()
+        startup_layout.addWidget(self.desktop_shortcut_check)
+
         layout.addWidget(self.startup_group)
 
         # Save button
@@ -95,15 +116,36 @@ class SettingsTab(QWidget):
 
         layout.addStretch()
 
+    def _populate_audio_devices(self):
+        self.audio_device_combo.clear()
+        saved_device = self.db.get_setting('audio_device', '')
+
+        self.audio_device_combo.addItem(self.loc.tr('default_device'), '')
+
+        devices = QMediaDevices.audioOutputs()
+        selected_idx = 0
+        for i, device in enumerate(devices):
+            desc = device.description()
+            device_id = device.id().data().decode('utf-8', errors='replace')
+            self.audio_device_combo.addItem(desc, device_id)
+            if device_id == saved_device:
+                selected_idx = i + 1
+
+        self.audio_device_combo.setCurrentIndex(selected_idx)
+
     def apply_translations(self):
         self.title_label.setText(self.loc.tr('settings_title'))
         self.lang_group.setTitle(self.loc.tr('language_settings'))
         self.lang_label.setText(self.loc.tr('language'))
+        self.audio_group.setTitle(self.loc.tr('audio_settings'))
+        self.audio_device_label.setText(self.loc.tr('audio_device'))
+        self.refresh_devices_btn.setText(self.loc.tr('refresh_devices'))
         self.volume_group.setTitle(self.loc.tr('volume_settings'))
         self.volume_label.setText(self.loc.tr('volume'))
         self.startup_group.setTitle(self.loc.tr('startup_settings'))
         self.autostart_check.setText(self.loc.tr('autostart'))
         self.start_minimized_check.setText(self.loc.tr('start_minimized'))
+        self.desktop_shortcut_check.setText(self.loc.tr('create_desktop_shortcut'))
         self.save_btn.setText(self.loc.tr('save_settings'))
         self.info_label.setText(self.loc.tr('settings_info'))
 
@@ -122,6 +164,9 @@ class SettingsTab(QWidget):
         start_min = self.db.get_setting('start_minimized', 'false') == 'true'
         self.start_minimized_check.setChecked(start_min)
 
+        desktop_shortcut = self.db.get_setting('desktop_shortcut', 'false') == 'true'
+        self.desktop_shortcut_check.setChecked(desktop_shortcut)
+
     def _on_volume_changed(self, value):
         self.volume_value_label.setText(f"{value}%")
 
@@ -136,6 +181,11 @@ class SettingsTab(QWidget):
         self.db.set_setting('language', lang)
         self.loc.set_language(lang)
 
+        # Audio device
+        device_id = self.audio_device_combo.currentData()
+        self.db.set_setting('audio_device', device_id or '')
+        self.sound_engine.set_output_device(device_id)
+
         volume = self.volume_slider.value()
         self.db.set_setting('volume', str(volume))
         self.sound_engine.set_volume(volume)
@@ -146,6 +196,12 @@ class SettingsTab(QWidget):
 
         start_min = self.start_minimized_check.isChecked()
         self.db.set_setting('start_minimized', 'true' if start_min else 'false')
+
+        # Desktop shortcut
+        create_shortcut = self.desktop_shortcut_check.isChecked()
+        self.db.set_setting('desktop_shortcut', 'true' if create_shortcut else 'false')
+        if create_shortcut:
+            self._create_desktop_shortcut()
 
         QMessageBox.information(
             self, self.loc.tr('success'), self.loc.tr('settings_saved')
@@ -180,5 +236,35 @@ class SettingsTab(QWidget):
                     winreg.CloseKey(key)
                 except FileNotFoundError:
                     pass
+        except Exception:
+            pass
+
+    def _create_desktop_shortcut(self):
+        if sys.platform != 'win32':
+            return
+
+        try:
+            import subprocess
+            if getattr(sys, 'frozen', False):
+                exe_path = sys.executable
+            else:
+                exe_path = os.path.abspath(sys.argv[0])
+
+            desktop = os.path.join(os.environ.get('USERPROFILE', ''), 'Desktop')
+            shortcut_path = os.path.join(desktop, 'School Bell Scheduler.lnk')
+
+            # Use PowerShell to create the shortcut
+            ps_script = f'''
+$ws = New-Object -ComObject WScript.Shell
+$shortcut = $ws.CreateShortcut("{shortcut_path}")
+$shortcut.TargetPath = "{exe_path}"
+$shortcut.WorkingDirectory = "{os.path.dirname(exe_path)}"
+$shortcut.Description = "School Bell Scheduler"
+$shortcut.Save()
+'''
+            subprocess.run(
+                ['powershell', '-NoProfile', '-Command', ps_script],
+                capture_output=True, timeout=10
+            )
         except Exception:
             pass
