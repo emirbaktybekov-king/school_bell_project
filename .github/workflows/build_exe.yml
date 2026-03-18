@@ -24,6 +24,11 @@ jobs:
       - name: Install Pillow for icon
         run: pip install Pillow
 
+      - name: Copy default sounds to data
+        run: |
+          if (!(Test-Path "data\sounds")) { New-Item -ItemType Directory -Path "data\sounds" -Force }
+          Copy-Item "assets\sounds\*" "data\sounds\" -Force
+
       - name: Build EXE
         run: |
           pyinstaller --onefile --noconsole --name SchoolBell `
@@ -31,6 +36,10 @@ jobs:
             --add-data "locales;locales" `
             --add-data "data;data" `
             --icon "assets/icon.ico" `
+            --hidden-import "json" `
+            --hidden-import "sqlite3" `
+            --hidden-import "logging" `
+            --hidden-import "traceback" `
             app/main.py
 
       - name: Upload EXE

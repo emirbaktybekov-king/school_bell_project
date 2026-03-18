@@ -111,7 +111,11 @@ class SequenceEditorDialog(QDialog):
             type_item = QTableWidgetItem(self.loc.tr('pause'))
             type_item.setData(Qt.ItemDataRole.UserRole, item)
             self.table.setItem(row, 0, type_item)
-            self.table.setItem(row, 1, QTableWidgetItem(f"{item.get('duration', 1)}s"))
+            dur = item.get('duration', 1)
+            h = dur // 3600
+            m = (dur % 3600) // 60
+            s = dur % 60
+            self.table.setItem(row, 1, QTableWidgetItem(f"{h:02d}:{m:02d}:{s:02d}"))
             self.table.setItem(row, 2, QTableWidgetItem(''))
 
         for col in range(3):
@@ -147,19 +151,21 @@ class SequenceEditorDialog(QDialog):
         dialog.setWindowTitle(self.loc.tr('pause_duration'))
         layout = QVBoxLayout(dialog)
 
-        spin = QSpinBox()
-        spin.setMinimum(1)
-        spin.setMaximum(60)
-        spin.setValue(5)
-        spin.setSuffix(" s")
-        layout.addWidget(spin)
+        time_edit = QTimeEdit()
+        time_edit.setDisplayFormat("HH:mm:ss")
+        time_edit.setTime(QTime(0, 0, 0))
+        layout.addWidget(time_edit)
 
         btn = QPushButton("OK")
         btn.clicked.connect(dialog.accept)
         layout.addWidget(btn)
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            item = {'type': 'pause', 'duration': spin.value()}
+            t = time_edit.time()
+            total_seconds = t.hour() * 3600 + t.minute() * 60 + t.second()
+            if total_seconds < 1:
+                total_seconds = 1
+            item = {'type': 'pause', 'duration': total_seconds}
             self.sequence.append(item)
             self._add_row(item)
 
@@ -300,7 +306,11 @@ class BellEditDialog(QDialog):
                 if item['type'] == 'sound':
                     parts.append(item['filename'])
                 elif item['type'] == 'pause':
-                    parts.append(f"[{item['duration']}s]")
+                    dur = item['duration']
+                    h = dur // 3600
+                    m = (dur % 3600) // 60
+                    s = dur % 60
+                    parts.append(f"[{h:02d}:{m:02d}:{s:02d}]")
             self.seq_info.setText(" > ".join(parts))
         else:
             self.seq_info.setText(self.loc.tr('no_sequence'))

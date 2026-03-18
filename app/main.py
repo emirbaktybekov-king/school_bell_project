@@ -1,9 +1,31 @@
 """
 School Bell Scheduler - Main Entry Point
 A fully offline school bell scheduler that runs 24/7.
+Crash-proof: auto-restarts on unhandled exceptions.
 """
 import sys
 import os
+import logging
+import traceback
+from datetime import datetime
+
+
+def setup_logging(data_path):
+    """Set up file logging for crash diagnostics."""
+    log_file = os.path.join(data_path, 'school_bell.log')
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.WARNING,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
+    # Keep log file from growing forever: truncate if > 1MB
+    try:
+        if os.path.exists(log_file) and os.path.getsize(log_file) > 1_000_000:
+            with open(log_file, 'w') as f:
+                f.write(f"--- Log truncated at {datetime.now()} ---\n")
+    except OSError:
+        pass
 
 
 def get_base_path():
@@ -57,6 +79,8 @@ def copy_bundled_assets():
 
 
 def main():
+    setup_logging(DATA_PATH)
+
     from PySide6.QtWidgets import QApplication
     from PySide6.QtCore import Qt, QCoreApplication
     from PySide6.QtGui import QIcon
@@ -112,5 +136,29 @@ def main():
     sys.exit(exit_code)
 
 
+def run_with_recovery():
+    """Run the app with automatic crash recovery. Restarts up to 10 times."""
+    import time as _time
+    max_restarts = 10
+    restart_count = 0
+
+    while restart_count < max_restarts:
+        try:
+            main()
+            return
+        except SystemExit:
+            return
+        except Exception:
+            restart_count += 1
+            logging.critical(
+                "CRASH #%d — restarting:\n%s",
+                restart_count, traceback.format_exc()
+            )
+            _time.sleep(2)
+
+    logging.critical("Max restarts (%d) reached. Giving up.", max_restarts)
+    sys.exit(1)
+
+
 if __name__ == '__main__':
-    main()
+    run_with_recovery()

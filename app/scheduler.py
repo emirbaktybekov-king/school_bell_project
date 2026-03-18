@@ -3,6 +3,7 @@ Scheduler module - Manages bell timing and triggers sound playback.
 Uses local system time only. Runs 24/7.
 """
 import json
+import logging
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -26,6 +27,7 @@ class BellScheduler(QObject):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._check_bells)
         self._last_triggered = {}
+        self._last_checked_minute = None
 
     def start(self):
         self._timer.start(1000)
@@ -51,16 +53,26 @@ class BellScheduler(QObject):
             self.pause()
 
     def _check_bells(self):
+        try:
+            self._check_bells_inner()
+        except Exception:
+            logging.error("Scheduler error (recovered):\n%s",
+                          __import__('traceback').format_exc())
+
+    def _check_bells_inner(self):
         if self._paused:
             return
 
         now = datetime.now()
         current_time = now.strftime('%H:%M')
         current_day = DAY_MAP.get(now.weekday(), '')
-        current_second = now.second
 
-        if current_second != 0:
+        # Only check once per minute (avoids duplicate triggers and
+        # fixes the bug where second==0 could be skipped by the timer)
+        current_minute_key = now.strftime('%Y-%m-%d_%H:%M')
+        if current_minute_key == self._last_checked_minute:
             return
+        self._last_checked_minute = current_minute_key
 
         bells = self.db.get_enabled_bells()
         for bell in bells:
@@ -72,10 +84,14 @@ class BellScheduler(QObject):
                     self._cleanup_old_triggers(now)
 
     def _trigger_bell(self, bell):
-        self.bell_triggered.emit(bell)
-        sequence = bell.get('sound_sequence', [])
-        if sequence:
-            self.sound_engine.play_sequence(sequence)
+        try:
+            self.bell_triggered.emit(bell)
+            sequence = bell.get('sound_sequence', [])
+            if sequence:
+                self.sound_engine.play_sequence(sequence)
+        except Exception:
+            logging.error("Bell trigger error:\n%s",
+                          __import__('traceback').format_exc())
 
     def _cleanup_old_triggers(self, now):
         cutoff = now - timedelta(minutes=2)

@@ -119,16 +119,19 @@ class SoundEngine(QObject):
             self.playback_error.emit(str(error_string))
 
     def play_sequence(self, sequence):
-        self._stop_flag.clear()
-        if self._playback_thread and self._playback_thread.is_alive():
-            self._stop_flag.set()
-            self._playback_thread.join(timeout=2)
+        try:
+            self._stop_flag.clear()
+            if self._playback_thread and self._playback_thread.is_alive():
+                self._stop_flag.set()
+                self._playback_thread.join(timeout=2)
 
-        self._stop_flag.clear()
-        self._playback_thread = threading.Thread(
-            target=self._play_sequence_thread, args=(sequence,), daemon=True
-        )
-        self._playback_thread.start()
+            self._stop_flag.clear()
+            self._playback_thread = threading.Thread(
+                target=self._play_sequence_thread, args=(sequence,), daemon=True
+            )
+            self._playback_thread.start()
+        except Exception as e:
+            self.playback_error.emit(str(e))
 
     def _play_sequence_thread(self, sequence):
         for item in sequence:

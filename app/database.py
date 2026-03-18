@@ -1,19 +1,35 @@
 """
 Database module - SQLite database management for School Bell Scheduler.
+Auto-recovers from corruption by recreating the database.
 """
 import sqlite3
 import json
 import os
+import logging
 from datetime import datetime
 
 
 class Database:
     def __init__(self, db_path):
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self._create_tables()
-        self._insert_defaults()
+        try:
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+            # Quick integrity check
+            self.conn.execute("PRAGMA integrity_check")
+            self._create_tables()
+            self._insert_defaults()
+        except sqlite3.DatabaseError:
+            logging.warning("Database corrupted — recreating: %s", db_path)
+            self.conn = None
+            try:
+                os.remove(db_path)
+            except OSError:
+                pass
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+            self._create_tables()
+            self._insert_defaults()
 
     def _create_tables(self):
         cursor = self.conn.cursor()
@@ -69,9 +85,9 @@ class Database:
 
     def _insert_default_schedule(self):
         sound_seq = json.dumps([
-            {"type": "sound", "filename": "school-bell.mp3"},
+            {"type": "sound", "filename": "bell-sound.mp3"},
             {"type": "pause", "duration": 3},
-            {"type": "sound", "filename": "school-bell.mp3"}
+            {"type": "sound", "filename": "bell-sound.mp3"}
         ])
         weekdays = json.dumps(["mon", "tue", "wed", "thu", "fri", "sat"])
         cursor = self.conn.cursor()
