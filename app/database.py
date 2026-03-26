@@ -84,13 +84,22 @@ class Database:
             self._insert_default_schedule()
 
     def _insert_default_schedule(self):
-        sound_seq = json.dumps([
-            {"type": "sound", "filename": "bell-sound.mp3"},
-            {"type": "pause", "duration": 3},
-            {"type": "sound", "filename": "bell-sound.mp3"}
+        # 5-second bell for all regular bells
+        bell_seq = json.dumps([
+            {"type": "sound", "filename": "bell-sound.mp3", "duration": 5}
+        ])
+        # National anthem (plays full ~2:48 at 07:27, finishes right before 07:30)
+        anthem_seq = json.dumps([
+            {"type": "sound", "filename": "kyrgyzstan_national_anthem.mp3"}
         ])
         weekdays = json.dumps(["mon", "tue", "wed", "thu", "fri", "sat"])
         cursor = self.conn.cursor()
+
+        # ===== National Anthem at 07:27 =====
+        cursor.execute(
+            "INSERT INTO bells (name, time, enabled, days, sound_sequence) VALUES (?, ?, 1, ?, ?)",
+            ("Гимн Кыргызстана", "07:27", weekdays, anthem_seq)
+        )
 
         # ===== 1 смена (Shift 1) =====
         shift1 = [
@@ -135,12 +144,11 @@ class Database:
             if t not in seen_times:
                 seen_times.add(t)
                 all_bells.append((name, t))
-            # If duplicate time, keep shift 1 name (it rings once for both)
 
         for name, t in all_bells:
             cursor.execute(
                 "INSERT INTO bells (name, time, enabled, days, sound_sequence) VALUES (?, ?, 1, ?, ?)",
-                (name, t, weekdays, sound_seq)
+                (name, t, weekdays, bell_seq)
             )
         self.conn.commit()
 

@@ -158,13 +158,14 @@ class SoundEngine(QObject):
 
             if item.get('type') == 'sound':
                 filename = item.get('filename', '')
+                max_duration = item.get('duration', None)
                 filepath = self.get_sound_path(filename)
                 if os.path.exists(filepath):
                     self.playback_started.emit(filename)
                     if self._use_simpleaudio and filepath.lower().endswith('.wav'):
-                        self._play_simpleaudio_blocking(filepath)
+                        self._play_simpleaudio_blocking(filepath, max_duration)
                     else:
-                        self._play_blocking(filepath)
+                        self._play_blocking(filepath, max_duration)
 
             elif item.get('type') == 'pause':
                 duration = item.get('duration', 1)
@@ -175,37 +176,43 @@ class SoundEngine(QObject):
 
         self.playback_finished.emit()
 
-    def _play_simpleaudio_blocking(self, filepath):
+    def _play_simpleaudio_blocking(self, filepath, max_duration=None):
         try:
             import simpleaudio as sa
             wave_obj = sa.WaveObject.from_wave_file(filepath)
             play_obj = wave_obj.play()
+            elapsed = 0.0
             while play_obj.is_playing():
                 if self._stop_flag.is_set():
                     play_obj.stop()
                     return
+                if max_duration and elapsed >= max_duration:
+                    play_obj.stop()
+                    return
                 time.sleep(0.05)
+                elapsed += 0.05
         except Exception as e:
             self.playback_error.emit(str(e))
 
     # ---- Platform-native blocking playback (called from background thread) ----
 
-    def _play_blocking(self, filepath):
-        """Play a sound file and block until done. Works from any thread."""
+    def _play_blocking(self, filepath, max_duration=None):
+        """Play a sound file and block until done. Works from any thread.
+        If max_duration is set (seconds), stops playback after that time."""
         # Windows: use MCI (winmm.dll) - built into every Windows, supports MP3
         if self._has_mci:
-            if self._play_windows_mci(filepath):
+            if self._play_windows_mci(filepath, max_duration):
                 return
 
         # macOS: use afplay (development only)
         if platform.system() == 'Darwin':
-            if self._play_afplay(filepath):
+            if self._play_afplay(filepath, max_duration):
                 return
 
         # Fallback: QMediaPlayer via main-thread signal
-        self._play_qt_blocking(filepath)
+        self._play_qt_blocking(filepath, max_duration)
 
-    def _play_windows_mci(self, filepath):
+    def _play_windows_mci(self, filepath, max_duration=None):
         """Play sound using Windows MCI (winmm.dll). Works from any thread."""
         try:
             import ctypes
@@ -232,9 +239,13 @@ class SoundEngine(QObject):
             # Start playback (non-blocking MCI call, we poll for completion)
             winmm.mciSendStringW(f'play {alias}', None, 0, 0)
 
-            # Wait until done or stopped
+            # Wait until done, stopped, or max_duration reached
+            elapsed = 0.0
             while True:
                 if self._stop_flag.is_set():
+                    winmm.mciSendStringW(f'stop {alias}', None, 0, 0)
+                    break
+                if max_duration and elapsed >= max_duration:
                     winmm.mciSendStringW(f'stop {alias}', None, 0, 0)
                     break
                 winmm.mciSendStringW(
@@ -243,6 +254,7 @@ class SoundEngine(QObject):
                 if buf.value != 'playing':
                     break
                 time.sleep(0.05)
+                elapsed += 0.05
 
             winmm.mciSendStringW(f'close {alias}', None, 0, 0)
             return True
@@ -250,7 +262,7 @@ class SoundEngine(QObject):
             logging.warning("Windows MCI playback failed: %s", e)
             return False
 
-    def _play_afplay(self, filepath):
+    def _play_afplay(self, filepath, max_duration=None):
         """Play sound using macOS afplay. Works from any thread."""
         try:
             volume = self._volume / 100.0
@@ -259,12 +271,18 @@ class SoundEngine(QObject):
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             self._native_proc = proc
+            elapsed = 0.0
             while proc.poll() is None:
                 if self._stop_flag.is_set():
                     proc.terminate()
                     self._native_proc = None
                     return True
+                if max_duration and elapsed >= max_duration:
+                    proc.terminate()
+                    self._native_proc = None
+                    return True
                 time.sleep(0.05)
+                elapsed += 0.05
             self._native_proc = None
             return True
         except Exception as e:
@@ -296,13 +314,13 @@ class SoundEngine(QObject):
         self._qt_temp_player = player
         self._qt_temp_ao = ao
 
-    def _play_qt_blocking(self, filepath):
+    def _play_qt_blocking(self, filepath, max_duration=None):
         """Fallback: QMediaPlayer via signal to main thread."""
         done_event = threading.Event()
         self._qt_done_event = done_event
         self._qt_play_requested.emit(filepath)
 
-        timeout = 30.0
+        timeout = max_duration if max_duration else 300.0
         elapsed = 0.0
         while not done_event.is_set() and elapsed < timeout:
             if self._stop_flag.is_set():
@@ -311,6 +329,11 @@ class SoundEngine(QObject):
                 return
             time.sleep(0.05)
             elapsed += 0.05
+
+        # Stop player if we hit max_duration
+        if max_duration and elapsed >= max_duration:
+            if hasattr(self, '_qt_temp_player') and self._qt_temp_player:
+                self._qt_temp_player.stop()
 
     def stop(self):
         self._stop_flag.set()
