@@ -1,10 +1,14 @@
 """
-Sound Engine module - Handles sound playback using simpleaudio.
-Falls back to PySide6 QMediaPlayer if simpleaudio is not available.
+Sound Engine module - Handles sound playback.
+Primary: Windows MCI (winmm.dll) for reliable MP3/WAV playback from any thread.
+Fallback: PySide6 QMediaPlayer, simpleaudio (WAV only).
 """
 import os
+import sys
 import time
-import json
+import logging
+import platform
+import subprocess
 import threading
 
 from PySide6.QtCore import QObject, Signal, QUrl
@@ -15,6 +19,7 @@ class SoundEngine(QObject):
     playback_started = Signal(str)
     playback_finished = Signal()
     playback_error = Signal(str)
+    _qt_play_requested = Signal(str)
 
     def __init__(self, sounds_path):
         super().__init__()
@@ -26,6 +31,19 @@ class SoundEngine(QObject):
         self._volume = 100
         self._output_device = None
         self._use_simpleaudio = False
+        self._qt_done_event = None
+        self._native_proc = None
+        self._qt_play_requested.connect(self._setup_qt_player)
+
+        # Check for Windows MCI support
+        self._has_mci = False
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                self._winmm = ctypes.windll.winmm
+                self._has_mci = True
+            except Exception:
+                self._has_mci = False
 
         try:
             import simpleaudio
@@ -146,7 +164,7 @@ class SoundEngine(QObject):
                     if self._use_simpleaudio and filepath.lower().endswith('.wav'):
                         self._play_simpleaudio_blocking(filepath)
                     else:
-                        self._play_qt_blocking(filepath)
+                        self._play_blocking(filepath)
 
             elif item.get('type') == 'pause':
                 duration = item.get('duration', 1)
@@ -170,47 +188,138 @@ class SoundEngine(QObject):
         except Exception as e:
             self.playback_error.emit(str(e))
 
+    # ---- Platform-native blocking playback (called from background thread) ----
+
+    def _play_blocking(self, filepath):
+        """Play a sound file and block until done. Works from any thread."""
+        # Windows: use MCI (winmm.dll) - built into every Windows, supports MP3
+        if self._has_mci:
+            if self._play_windows_mci(filepath):
+                return
+
+        # macOS: use afplay (development only)
+        if platform.system() == 'Darwin':
+            if self._play_afplay(filepath):
+                return
+
+        # Fallback: QMediaPlayer via main-thread signal
+        self._play_qt_blocking(filepath)
+
+    def _play_windows_mci(self, filepath):
+        """Play sound using Windows MCI (winmm.dll). Works from any thread."""
+        try:
+            import ctypes
+            winmm = self._winmm
+            alias = "schoolbell"
+            buf = ctypes.create_unicode_buffer(256)
+
+            # Close any previous instance
+            winmm.mciSendStringW(f'close {alias}', None, 0, 0)
+
+            # Open the file
+            ret = winmm.mciSendStringW(
+                f'open "{filepath}" alias {alias}', buf, 256, 0
+            )
+            if ret != 0:
+                return False
+
+            # Set volume (MCI uses 0-1000)
+            vol = int(self._volume * 10)
+            winmm.mciSendStringW(
+                f'setaudio {alias} volume to {vol}', None, 0, 0
+            )
+
+            # Start playback (non-blocking MCI call, we poll for completion)
+            winmm.mciSendStringW(f'play {alias}', None, 0, 0)
+
+            # Wait until done or stopped
+            while True:
+                if self._stop_flag.is_set():
+                    winmm.mciSendStringW(f'stop {alias}', None, 0, 0)
+                    break
+                winmm.mciSendStringW(
+                    f'status {alias} mode', buf, 256, 0
+                )
+                if buf.value != 'playing':
+                    break
+                time.sleep(0.05)
+
+            winmm.mciSendStringW(f'close {alias}', None, 0, 0)
+            return True
+        except Exception as e:
+            logging.warning("Windows MCI playback failed: %s", e)
+            return False
+
+    def _play_afplay(self, filepath):
+        """Play sound using macOS afplay. Works from any thread."""
+        try:
+            volume = self._volume / 100.0
+            proc = subprocess.Popen(
+                ['afplay', '-v', str(volume), filepath],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            self._native_proc = proc
+            while proc.poll() is None:
+                if self._stop_flag.is_set():
+                    proc.terminate()
+                    self._native_proc = None
+                    return True
+                time.sleep(0.05)
+            self._native_proc = None
+            return True
+        except Exception as e:
+            logging.warning("afplay failed: %s", e)
+            return False
+
+    def _setup_qt_player(self, filepath):
+        """Slot that runs on the main thread to create and play QMediaPlayer."""
+        done_event = self._qt_done_event
+        ao = self._create_audio_output()
+        player = QMediaPlayer()
+        player.setAudioOutput(ao)
+        player.setSource(QUrl.fromLocalFile(filepath))
+
+        def on_status(status):
+            if status in (QMediaPlayer.MediaStatus.EndOfMedia,
+                          QMediaPlayer.MediaStatus.InvalidMedia):
+                if done_event:
+                    done_event.set()
+
+        def on_err(error, msg=""):
+            if error != QMediaPlayer.Error.NoError:
+                if done_event:
+                    done_event.set()
+
+        player.mediaStatusChanged.connect(on_status)
+        player.errorOccurred.connect(on_err)
+        player.play()
+        self._qt_temp_player = player
+        self._qt_temp_ao = ao
+
     def _play_qt_blocking(self, filepath):
-        import threading as th
+        """Fallback: QMediaPlayer via signal to main thread."""
+        done_event = threading.Event()
+        self._qt_done_event = done_event
+        self._qt_play_requested.emit(filepath)
 
-        done_event = th.Event()
-
-        from PySide6.QtCore import QTimer, QCoreApplication
-
-        def setup_player():
-            ao = self._create_audio_output()
-            player = QMediaPlayer()
-            player.setAudioOutput(ao)
-            player.setSource(QUrl.fromLocalFile(filepath))
-
-            def on_status(status):
-                if status in (QMediaPlayer.MediaStatus.EndOfMedia,
-                              QMediaPlayer.MediaStatus.InvalidMedia):
-                    done_event.set()
-
-            def on_err(error, msg=""):
-                if error != QMediaPlayer.Error.NoError:
-                    done_event.set()
-
-            player.mediaStatusChanged.connect(on_status)
-            player.errorOccurred.connect(on_err)
-            player.play()
-            self._qt_temp_player = player
-            self._qt_temp_ao = ao
-
-        QTimer.singleShot(0, setup_player)
-
-        while not done_event.is_set():
+        timeout = 30.0
+        elapsed = 0.0
+        while not done_event.is_set() and elapsed < timeout:
             if self._stop_flag.is_set():
-                if hasattr(self, '_qt_temp_player'):
+                if hasattr(self, '_qt_temp_player') and self._qt_temp_player:
                     self._qt_temp_player.stop()
                 return
             time.sleep(0.05)
+            elapsed += 0.05
 
     def stop(self):
         self._stop_flag.set()
         if self._player:
             self._player.stop()
+        if self._native_proc and self._native_proc.poll() is None:
+            self._native_proc.terminate()
+            self._native_proc = None
+        # MCI stop is handled by the polling loop via _stop_flag
 
     def preview_sound(self, filename):
         self.stop()

@@ -164,6 +164,14 @@ class DashboardTab(QWidget):
         now = datetime.now()
         current_day = DAY_MAP.get(now.weekday(), '')
 
+        # Show day of week and date in the schedule header
+        day_keys = ['day_mon', 'day_tue', 'day_wed', 'day_thu', 'day_fri', 'day_sat', 'day_sun']
+        day_name = self.loc.tr(day_keys[now.weekday()])
+        date_str = now.strftime('%d.%m.%Y')
+        self.today_label.setText(
+            f"{self.loc.tr('today_schedule')} — {day_name}, {date_str}"
+        )
+
         bells = self.db.get_enabled_bells()
         today_bells = [b for b in bells if current_day in b['days']]
         today_bells.sort(key=lambda b: b['time'])
