@@ -19,31 +19,40 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install Pillow for icon
-        run: pip install Pillow
-
-      - name: Copy default sounds to data
         run: |
-          if (!(Test-Path "data\sounds")) { New-Item -ItemType Directory -Path "data\sounds" -Force }
-          Copy-Item "assets\sounds\*" "data\sounds\" -Force
+          pip install PySide6==6.6.1 PyInstaller==6.3.0
+          pip install simpleaudio==1.0.4 || echo "simpleaudio optional, skipping"
 
       - name: Build EXE
         run: |
-          pyinstaller --onefile --noconsole --name SchoolBell `
+          pyinstaller --onefile --noconsole --name SchoolBellScheduler `
             --add-data "assets;assets" `
             --add-data "locales;locales" `
-            --add-data "data;data" `
             --icon "assets/icon.ico" `
+            --hidden-import "PySide6.QtMultimedia" `
+            --hidden-import "PySide6.QtWidgets" `
+            --hidden-import "PySide6.QtCore" `
+            --hidden-import "PySide6.QtGui" `
             --hidden-import "json" `
             --hidden-import "sqlite3" `
             --hidden-import "logging" `
             --hidden-import "traceback" `
+            --hidden-import "ctypes" `
             app/main.py
 
-      - name: Upload EXE
+      - name: Verify EXE exists
+        run: |
+          if (Test-Path "dist\SchoolBellScheduler.exe") {
+            $size = (Get-Item "dist\SchoolBellScheduler.exe").Length / 1MB
+            Write-Host "Build successful! EXE size: $([math]::Round($size, 1)) MB"
+          } else {
+            Write-Host "ERROR: EXE not found!"
+            exit 1
+          }
+
+      - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SchoolBell
-          path: dist/SchoolBell.exe
+          name: SchoolBellScheduler
+          path: dist/SchoolBellScheduler.exe
+          retention-days: 90
